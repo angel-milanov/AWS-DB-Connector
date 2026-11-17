@@ -1,0 +1,232 @@
+# Build, test, package and release AWS DB Connector for Windows, macOS and Linux.
+#
+#   every push / pull request ............ test
+#   default branch, tags, manual run ..... + native packages for every platform (downloadable from the run's "Artifacts")
+#   tags like v1.2.3 ..................... + GitHub release with the packages attached
+#
+# jpackage cannot cross-compile, so each package is built on a runner of its own operating system and CPU.
+#
+# To release:   git tag v1.2.3 && git push origin v1.2.3
+#   - Tags with a suffix (v1.3.0-rc.1, v2.0.0-beta) are published as pre-releases; the app itself gets version 1.3.0 / 2.0.0.
+#   - The major version must be 1 or higher: jpackage rejects macOS app versions that start with 0.
+
+name: Build
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Superseded branch builds are cancelled; a release build always runs to the end.
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  APP_NAME: AWSDBConnector
+
+jobs:
+  # ---------------------------------------------------------------------------- test
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release-name: ${{ steps.version.outputs.release-name }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            re='^v([1-9][0-9]*(\.[0-9]+){0,2})(-[0-9A-Za-z.-]+)?$'
+            if [[ ! "$GITHUB_REF_NAME" =~ $re ]]; then
+              echo "::error::Tag '$GITHUB_REF_NAME' is not a release tag. Use v<major>[.<minor>[.<patch>]][-<suffix>] with major >= 1, e.g. v1.2.3 or v1.3.0-rc.1"
+              exit 1
+            fi
+            version="${BASH_REMATCH[1]}"
+            release_name="$GITHUB_REF_NAME"
+            if [[ -n "${BASH_REMATCH[3]}" ]]; then prerelease=true; else prerelease=false; fi
+          else
+            # Branch builds keep the default version from build.gradle.kts and are named after the commit.
+            version=""
+            release_name="${GITHUB_SHA::7}"
+            prerelease=false
+          fi
+          {
+            echo "version=$version"
+            echo "release-name=$release_name"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+          echo "App version: ${version:-build.gradle.kts default}, file names: $APP_NAME-$release_name-<platform>, pre-release: $prerelease"
+
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Build and test
+        run: |
+          chmod +x gradlew
+          ./gradlew build
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: build/reports/tests/
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------- package
+
+  package:
+    name: Package (${{ matrix.platform }})
+    needs: test
+    # Packages are built for the default branch, tags and manual runs - not for every branch push or pull request.
+    if: >-
+      github.ref_type == 'tag' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: windows-x64, runner: windows-latest }
+          - { platform: linux-x64, runner: ubuntu-latest }
+          - { platform: linux-arm64, runner: ubuntu-24.04-arm }
+          - { platform: macos-arm64, runner: macos-latest }    # Apple Silicon
+          - { platform: macos-x64, runner: macos-26-intel }    # Intel
+    runs-on: ${{ matrix.runner }}
+    env:
+      APP_VERSION: ${{ needs.test.outputs.version }}
+      BASE_NAME: AWSDBConnector-${{ needs.test.outputs.release-name }}-${{ matrix.platform }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Prepare
+        run: |
+          chmod +x gradlew
+          mkdir -p dist
+
+      # The version argument is only passed for tag builds; branch builds use the default from build.gradle.kts.
+      - name: Package for Linux (tar.gz, deb)
+        if: runner.os == 'Linux'
+        run: |
+          ./gradlew jpackageImage ${APP_VERSION:+-PappVersion=$APP_VERSION}
+          tar -czf "dist/$BASE_NAME.tar.gz" -C build/jpackage "$APP_NAME"
+          ./gradlew jpackageImage -PjpackageType=deb ${APP_VERSION:+-PappVersion=$APP_VERSION}
+          mv build/jpackage/*.deb "dist/$BASE_NAME.deb"
+
+      - name: Package for macOS (dmg)
+        if: runner.os == 'macOS'
+        run: |
+          # hdiutil occasionally fails with "Resource busy" on hosted runners, so retry before giving up.
+          for attempt in 1 2 3; do
+            ./gradlew jpackageImage -PjpackageType=dmg ${APP_VERSION:+-PappVersion=$APP_VERSION} && break
+            if [[ $attempt == 3 ]]; then exit 1; fi
+            echo "::warning::DMG creation failed (attempt $attempt of 3), retrying"
+            sleep 15
+          done
+          mv build/jpackage/*.dmg "dist/$BASE_NAME.dmg"
+
+      - name: Package for Windows (zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $gradleArgs = @('jpackageImage')
+          if ($env:APP_VERSION) { $gradleArgs += "-PappVersion=$env:APP_VERSION" }
+          .\gradlew.bat @gradleArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path "build\jpackage\$env:APP_NAME" -DestinationPath "dist\$($env:BASE_NAME).zip"
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.BASE_NAME }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------- release (tags only)
+
+  release:
+    name: GitHub release
+    needs: [test, package]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ${{ env.APP_NAME }}-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create checksums
+        working-directory: dist
+        run: |
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.test.outputs.prerelease }}
+        run: |
+          # Re-running a release workflow replaces the files of the existing release instead of failing.
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG already exists, replacing its files"
+            gh release upload "$TAG" dist/* --clobber
+            exit 0
+          fi
+
+          cat > notes.md <<'EOF'
+          ## Downloads
+
+          | Platform | File |
+          | --- | --- |
+          | Windows (x64) | `*-windows-x64.zip`: unzip anywhere and run `AWSDBConnector.exe` |
+          | macOS (Apple Silicon) | `*-macos-arm64.dmg` |
+          | macOS (Intel) | `*-macos-x64.dmg` |
+          | Linux (x64) | `*-linux-x64.deb` (Debian/Ubuntu: `sudo apt install ./<file>.deb`) or `*-linux-x64.tar.gz` (run `AWSDBConnector/bin/AWSDBConnector`) |
+          | Linux (ARM64) | `*-linux-arm64.deb` or `*-linux-arm64.tar.gz` |
+
+          Requires the AWS CLI and the AWS Session Manager plugin to be installed.
+
+          The packages are not code signed:
+          - **Windows:** SmartScreen may warn on first start. Choose *More info* > *Run anyway*.
+          - **macOS:** if macOS reports that the app is damaged or cannot be opened, run `xattr -dr com.apple.quarantine /Applications/AWSDBConnector.app`
+
+          `SHA256SUMS.txt` contains the SHA-256 checksums of all files.
+          EOF
+
+          flags=()
+          if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease); fi
+          gh release create "$TAG" dist/* \
+            --title "AWS DB Connector $TAG" \
+            --notes-file notes.md \
+            --generate-notes \
+            "${flags[@]}"

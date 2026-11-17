@@ -1,0 +1,190 @@
+# Build, test, package and release AWS DB Connector for Windows, macOS and Linux.
+#
+#   every push / merge request ........ test
+#   default branch and tags ........... + native packages for all three systems (downloadable job artifacts)
+#   tags like v1.2.3 .................. + upload to the project's package registry and a GitLab release
+#
+# jpackage cannot cross-compile, so each package is built on a runner of its own operating system.
+# The runner tags below are the GitLab.com hosted runners; replace them if you use self-managed runners.
+# To release: git tag v1.2.3 && git push origin v1.2.3
+
+stages:
+  - test
+  - package
+  - publish
+  - release
+
+workflow:
+  rules:
+    # Avoid duplicate pipelines for branches that have an open merge request.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_TAG
+      variables:
+        RELEASE_NAME: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH
+
+variables:
+  APP_NAME: AWSDBConnector
+  # Used in file names; replaced by the tag (e.g. v1.2.3) in tag pipelines.
+  RELEASE_NAME: $CI_COMMIT_SHORT_SHA
+  GRADLE_USER_HOME: $CI_PROJECT_DIR/.gradle-home
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+  PACKAGE_REGISTRY_URL: $CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/awsdbconnector/$RELEASE_NAME
+  LINUX_TAR: $APP_NAME-$RELEASE_NAME-linux-x64.tar.gz
+  LINUX_DEB: $APP_NAME-$RELEASE_NAME-linux-amd64.deb
+  WINDOWS_ZIP: $APP_NAME-$RELEASE_NAME-windows-x64.zip
+  MACOS_DMG: $APP_NAME-$RELEASE_NAME-macos-arm64.dmg
+
+.gradle-cache:
+  cache:
+    key: gradle-$CI_RUNNER_EXECUTABLE_ARCH
+    paths:
+      - .gradle-home/caches
+      - .gradle-home/wrapper
+
+.package-rules:
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+.release-rules:
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+(\.\d+){0,2}$/
+
+# ---------------------------------------------------------------------------- test
+
+test:
+  stage: test
+  image: eclipse-temurin:21-jdk
+  extends: .gradle-cache
+  script:
+    - chmod +x gradlew
+    - ./gradlew build
+  artifacts:
+    when: always
+    expire_in: 1 week
+    reports:
+      junit: build/test-results/test/TEST-*.xml
+
+# ---------------------------------------------------------------------------- package
+
+package:linux:
+  stage: package
+  image: eclipse-temurin:21-jdk
+  extends: [.gradle-cache, .package-rules]
+  needs: [test]
+  before_script:
+    # binutils: objcopy is used when the runtime image is stripped; fakeroot: needed for .deb packages
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends binutils fakeroot
+    - chmod +x gradlew
+    - mkdir -p dist
+  script:
+    - ./gradlew jpackageImage
+    - tar -czf "dist/$LINUX_TAR" -C build/jpackage "$APP_NAME"
+    - ./gradlew jpackageImage -PjpackageType=deb
+    - mv build/jpackage/*.deb "dist/$LINUX_DEB"
+  artifacts:
+    name: $APP_NAME-$RELEASE_NAME-linux
+    expire_in: 2 weeks
+    paths:
+      - dist/
+
+package:windows:
+  stage: package
+  extends: .package-rules
+  needs: [test]
+  tags:
+    - saas-windows-medium-amd64
+  variables:
+    GRADLE_USER_HOME: $CI_PROJECT_DIR\.gradle-home
+  before_script:
+    - choco install temurin21 -y --no-progress
+    - $env:JAVA_HOME = (Get-ChildItem "C:\Program Files\Eclipse Adoptium" -Directory | Sort-Object Name -Descending | Select-Object -First 1).FullName
+    - $env:Path = "$env:JAVA_HOME\bin;$env:Path"
+    - java -version
+  script:
+    - .\gradlew.bat jpackageImage
+    - if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    - New-Item -ItemType Directory -Force dist | Out-Null
+    - Compress-Archive -Path "build\jpackage\$env:APP_NAME" -DestinationPath "dist\$env:WINDOWS_ZIP"
+  artifacts:
+    name: $APP_NAME-$RELEASE_NAME-windows
+    expire_in: 2 weeks
+    paths:
+      - dist/
+
+package:macos:
+  stage: package
+  extends: .package-rules
+  needs: [test]
+  tags:
+    - saas-macos-medium-m1
+  image: macos-15-xcode-16
+  before_script:
+    - brew install --cask temurin@21
+    - export JAVA_HOME="$(/usr/libexec/java_home -v 21)"
+    - java -version
+    - chmod +x gradlew
+    - mkdir -p dist
+  script:
+    - ./gradlew jpackageImage -PjpackageType=dmg
+    - mv build/jpackage/*.dmg "dist/$MACOS_DMG"
+  artifacts:
+    name: $APP_NAME-$RELEASE_NAME-macos
+    expire_in: 2 weeks
+    paths:
+      - dist/
+
+# ---------------------------------------------------------------------------- publish + release (tags only)
+
+publish:
+  stage: publish
+  image: curlimages/curl:latest
+  extends: .release-rules
+  needs:
+    - job: package:linux
+      artifacts: true
+    - job: package:windows
+      artifacts: true
+    - job: package:macos
+      artifacts: true
+  script:
+    - |
+      for file in "$LINUX_TAR" "$LINUX_DEB" "$WINDOWS_ZIP" "$MACOS_DMG"; do
+        echo "Uploading $file"
+        curl --fail --silent --show-error --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+             --upload-file "dist/$file" "$PACKAGE_REGISTRY_URL/$file"
+        echo
+      done
+
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/cli:latest
+  extends: .release-rules
+  needs: [publish]
+  script:
+    - echo "Creating release $CI_COMMIT_TAG"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: AWS DB Connector $CI_COMMIT_TAG
+    description: |
+      AWS DB Connector $CI_COMMIT_TAG
+
+      Requires the AWS CLI and the AWS Session Manager plugin to be installed.
+      The packages are not code signed, so Windows SmartScreen and macOS Gatekeeper will warn on first start.
+    assets:
+      links:
+        - name: Windows (x64, zip)
+          url: $PACKAGE_REGISTRY_URL/$WINDOWS_ZIP
+          link_type: package
+        - name: macOS (Apple Silicon, dmg)
+          url: $PACKAGE_REGISTRY_URL/$MACOS_DMG
+          link_type: package
+        - name: Linux (x64, tar.gz)
+          url: $PACKAGE_REGISTRY_URL/$LINUX_TAR
+          link_type: package
+        - name: Linux (amd64, deb)
+          url: $PACKAGE_REGISTRY_URL/$LINUX_DEB
+          link_type: package

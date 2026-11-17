@@ -1,0 +1,6 @@
+# Normalise line endings so the scripts work on every CI runner, whatever the committer's Git settings are.
+* text=auto
+gradlew text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
+*.jar binary
