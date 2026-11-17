@@ -50,6 +50,7 @@ class Tunnel(
     private var active = false
     private var generation = 0
     private var server: ServerSocket? = null
+    private var acceptor: Thread? = null
     private var session: BackendSession? = null
     private var pending: CompletableFuture<BackendSession>? = null
     private var retryTask: ScheduledFuture<*>? = null
@@ -101,6 +102,7 @@ class Tunnel(
             notifications.show(profile.name, "Local port ${profile.localPort} is already in use.", NoticeLevel.ERROR)
             return
         }
+        val accept = Thread.ofVirtual().name("accept-${profile.localPort}").unstarted { acceptLoop(srv) }
         val started = lock.withLock {
             if (active) false else {
                 active = true
@@ -108,6 +110,7 @@ class Tunnel(
                 failures = 0
                 dropped = false
                 server = srv
+                acceptor = accept
                 true
             }
         }
@@ -116,7 +119,7 @@ class Tunnel(
             return
         }
         log("Listening on 127.0.0.1:${profile.localPort}")
-        Thread.ofVirtual().name("accept-${profile.localPort}").start { acceptLoop(srv) }
+        accept.start()
         ensureSession(userInitiated = true)
     }
 
@@ -124,6 +127,7 @@ class Tunnel(
     fun stop() {
         var oldSession: BackendSession? = null
         var oldServer: ServerSocket? = null
+        var oldAcceptor: Thread? = null
         var oldPending: CompletableFuture<BackendSession>? = null
         lock.withLock {
             if (!active && state == TunnelState.STOPPED) return
@@ -135,10 +139,19 @@ class Tunnel(
             session = null
             oldServer = server
             server = null
+            oldAcceptor = acceptor
+            acceptor = null
             oldPending = pending
             pending = null
         }
         runCatching { oldServer?.close() }
+        // close() alone does not free the port: while a thread is blocked in accept() the socket is only really closed
+        // once that thread has returned from it, so restart() could otherwise find its own port still in use.
+        try {
+            oldAcceptor?.join(ACCEPT_EXIT_TIMEOUT_MS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
         clients.forEach { runCatching { it.close() } }
         oldPending?.completeExceptionally(CancellationException("Disconnected"))
         oldSession?.close()
@@ -375,5 +388,6 @@ class Tunnel(
     companion object {
         private const val LOGIN_WAIT_MINUTES = 6L
         private const val CLIENT_WAIT_MINUTES = 7L
+        private const val ACCEPT_EXIT_TIMEOUT_MS = 5_000L
     }
 }
