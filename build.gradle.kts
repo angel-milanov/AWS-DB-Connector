@@ -51,6 +51,7 @@ tasks.test {
  * Run with: gradlew jpackageImage                      -> app image (folder / .app bundle)
  *           gradlew jpackageImage -PjpackageType=dmg   -> installer; jpackage types: dmg, pkg, deb, rpm, msi, exe
  * jpackage cannot cross-compile: each operating system has to build its own package.
+ * The Windows installers (msi, exe) need the WiX Toolset 3.x installed or on the PATH.
  */
 tasks.register<Exec>("jpackageImage") {
     group = "distribution"
@@ -66,9 +67,10 @@ tasks.register<Exec>("jpackageImage") {
         delete(destDir)
         val javaHome = launcher.get().metadata.installationPath.asFile
         val exe = if (System.getProperty("os.name").lowercase().contains("win")) "jpackage.exe" else "jpackage"
-        commandLine(
+        val type = (findProperty("jpackageType") as String?) ?: "app-image"
+        val jpackageArgs = mutableListOf(
             File(javaHome, "bin/$exe").absolutePath,
-            "--type", (findProperty("jpackageType") as String?) ?: "app-image",
+            "--type", type,
             "--name", "AWSDBConnector",
             "--app-version", project.version.toString(),
             "--input", libDir.get().asFile.absolutePath,
@@ -82,6 +84,16 @@ tasks.register<Exec>("jpackageImage") {
                 "java.security.jgss,java.security.sasl,java.sql,jdk.crypto.ec,jdk.crypto.cryptoki," +
                 "jdk.unsupported,jdk.net,jdk.charsets,jdk.localedata,jdk.zipfs,jdk.accessibility",
         )
+        if (type == "msi" || type == "exe") {
+            jpackageArgs += listOf(
+                // Windows recognises a newer version as an upgrade of the installed one by this ID: never change it.
+                "--win-upgrade-uuid", "072107da-b513-42c1-a298-e0afa353df1d",
+                "--win-menu", "--win-menu-group", "AWS DB Connector",
+                "--win-shortcut", "--win-shortcut-prompt",
+                "--win-dir-chooser",
+            )
+        }
+        commandLine(jpackageArgs)
     }
 }
 
