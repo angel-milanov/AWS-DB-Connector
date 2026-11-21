@@ -4,6 +4,7 @@ import com.angelmilanov.awsdbconnector.aws.AwsProfiles
 import com.angelmilanov.awsdbconnector.tunnel.Tunnel
 import com.angelmilanov.awsdbconnector.tunnel.TunnelManager
 import com.angelmilanov.awsdbconnector.tunnel.TunnelState
+import com.angelmilanov.awsdbconnector.update.UpdateService
 import com.angelmilanov.awsdbconnector.util.Platform
 import java.awt.Color
 import java.awt.GraphicsEnvironment
@@ -38,6 +39,7 @@ import javax.swing.event.PopupMenuListener
 class TrayController(
     private val manager: TunnelManager,
     private val window: MainWindow,
+    private val updates: UpdateService,
     private val onExit: () -> Unit,
 ) {
     private sealed interface Node
@@ -72,6 +74,7 @@ class TrayController(
             })
             runCatching { SystemTray.getSystemTray().add(icon) }
             manager.addListener(::queueRefresh)
+            updates.addListener(::queueRefresh)
             refresh()
         }
     }
@@ -130,6 +133,7 @@ class TrayController(
             })
         }
         nodes += Separator
+        updates.available?.let { nodes += Item("Update to version ${it.release.version}…") { window.showUpdate() } }
         nodes += Item("New connection…") { window.newProfile() }
         nodes += Item("Open AWS DB Connector") { window.showWindow() }
         nodes += Item("Settings…") { window.showSettings() }

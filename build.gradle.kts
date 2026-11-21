@@ -79,6 +79,8 @@ tasks.register<Exec>("jpackageImage") {
             "--dest", destDir.get().asFile.absolutePath,
             "--java-options", "-Xmx256m",
             "--java-options", "-Dfile.encoding=UTF-8",
+            // Tells the application how it was installed, which decides how it updates itself (update/Installer.kt).
+            "--java-options", "-Dawsdbconnector.package=$type",
             "--add-modules",
             "java.base,java.desktop,java.logging,java.naming,java.net.http,java.xml,java.management," +
                 "java.security.jgss,java.security.sasl,java.sql,jdk.crypto.ec,jdk.crypto.cryptoki," +

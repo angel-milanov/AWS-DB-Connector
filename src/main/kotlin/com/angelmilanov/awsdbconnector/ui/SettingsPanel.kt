@@ -2,6 +2,8 @@ package com.angelmilanov.awsdbconnector.ui
 
 import com.angelmilanov.awsdbconnector.model.ConfigStore
 import com.angelmilanov.awsdbconnector.model.ThemeMode
+import com.angelmilanov.awsdbconnector.update.UpdateService
+import com.angelmilanov.awsdbconnector.update.UpdateState
 import com.angelmilanov.awsdbconnector.util.Platform
 import net.miginfocom.swing.MigLayout
 import java.awt.event.FocusAdapter
@@ -20,7 +22,11 @@ import javax.swing.SpinnerNumberModel
 import javax.swing.UIManager
 
 /** Application settings. Every change is applied and saved immediately. */
-class SettingsPanel(private val store: ConfigStore) : JPanel() {
+class SettingsPanel(
+    private val store: ConfigStore,
+    private val updates: UpdateService,
+    private val showUpdate: () -> Unit,
+) : JPanel() {
     private val theme = JComboBox(ThemeMode.entries.toTypedArray())
     private val showWindow = JCheckBox("Open this window when the application starts (otherwise start in the tray)")
     private val notifications = JCheckBox("Show desktop notifications (reconnects, errors, sign-in)")
@@ -30,6 +36,9 @@ class SettingsPanel(private val store: ConfigStore) : JPanel() {
     private val plugin = JTextField()
     private val awsCliStatus = hint("")
     private val pluginStatus = hint("")
+    private val autoUpdate = JCheckBox("Check for updates automatically (once a day, on GitHub)")
+    private val checkNow = JButton("Check for updates")
+    private val updateStatus = hint("")
 
     init {
         layout = MigLayout("insets 24 28 24 28, fillx, wrap 2, hidemode 3", "[right]14[grow,fill]", "[]10[]")
@@ -62,6 +71,16 @@ class SettingsPanel(private val store: ConfigStore) : JPanel() {
         add(JLabel(""))
         add(pluginStatus)
 
+        add(section("Updates"), "span, growx, gaptop 14")
+        add(JLabel("Version"))
+        add(JPanel(MigLayout("insets 0", "[]14[]10[]")).apply {
+            add(JLabel(updates.install?.version?.toString() ?: "Development build"))
+            add(checkNow)
+            add(updateStatus)
+        })
+        add(JLabel(""))
+        add(autoUpdate)
+
         add(section("Storage"), "span, growx, gaptop 14")
         add(JLabel("Connections"))
         add(readOnly(store.location.toString()))
@@ -74,6 +93,7 @@ class SettingsPanel(private val store: ConfigStore) : JPanel() {
         showWindow.isSelected = s.showWindowOnStart
         notifications.isSelected = s.notifications
         autoSso.isSelected = s.autoSsoLogin
+        autoUpdate.isSelected = s.checkForUpdates
         healthCheck.value = s.healthCheckSeconds
         awsCli.text = s.awsCliPath
         plugin.text = s.pluginPath
@@ -92,6 +112,33 @@ class SettingsPanel(private val store: ConfigStore) : JPanel() {
         onCommit(awsCli) { store.updateSettings { it.copy(awsCliPath = awsCli.text.trim()) }; refreshToolStatus() }
         onCommit(plugin) { store.updateSettings { it.copy(pluginPath = plugin.text.trim()) }; refreshToolStatus() }
         refreshToolStatus()
+
+        autoUpdate.addActionListener {
+            store.updateSettings { it.copy(checkForUpdates = autoUpdate.isSelected) }
+            if (autoUpdate.isSelected) Thread.ofVirtual().start { updates.check(manual = false) }
+        }
+        checkNow.addActionListener {
+            Thread.ofVirtual().start {
+                if (updates.check(manual = true) is UpdateState.Available) javax.swing.SwingUtilities.invokeLater(showUpdate)
+            }
+        }
+        updates.addListener { javax.swing.SwingUtilities.invokeLater(::refreshUpdateStatus) }
+        refreshUpdateStatus()
+    }
+
+    private fun refreshUpdateStatus() {
+        val installed = updates.install != null
+        val state = updates.state
+        autoUpdate.isEnabled = installed
+        checkNow.isEnabled = installed && state != UpdateState.Checking
+        updateStatus.text = when {
+            !installed -> "Updates are only available in an installed version."
+            state is UpdateState.Checking -> "Checking…"
+            state is UpdateState.UpToDate -> "You have the latest version."
+            state is UpdateState.Available -> "Version ${state.update.release.version} is available."
+            state is UpdateState.Failed -> "The check failed: ${state.message}"
+            else -> ""
+        }
     }
 
     private fun section(text: String) = JPanel(MigLayout("insets 0, fillx", "[][grow,fill]")).apply {

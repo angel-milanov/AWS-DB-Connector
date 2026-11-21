@@ -6,6 +6,7 @@ import com.angelmilanov.awsdbconnector.model.ConnectionProfile
 import com.angelmilanov.awsdbconnector.tunnel.Tunnel
 import com.angelmilanov.awsdbconnector.tunnel.TunnelManager
 import com.angelmilanov.awsdbconnector.tunnel.TunnelState
+import com.angelmilanov.awsdbconnector.update.UpdateService
 import com.angelmilanov.awsdbconnector.util.ActivityLog
 import net.miginfocom.swing.MigLayout
 import java.awt.BorderLayout
@@ -43,6 +44,7 @@ class MainWindow(
     private val manager: TunnelManager,
     private val loginGate: LoginGate,
     private val activity: ActivityLog,
+    private val updates: UpdateService,
     private val hideOnClose: Boolean,
     private val onExit: () -> Unit,
 ) : JFrame("AWS DB Connector") {
@@ -62,6 +64,8 @@ class MainWindow(
     private val connectButton = JButton("Connect")
     private val disconnectButton = JButton("Disconnect")
     private val reconnectButton = JButton("Reconnect")
+    private val updateButton = JButton()
+    private var updateDialog: UpdateDialog? = null
 
     init {
         iconImages = AppIcon.windowIcons()
@@ -76,10 +80,19 @@ class MainWindow(
 
         tabs.addTab("Connections", buildConnections())
         tabs.addTab("Activity", buildActivity())
-        tabs.addTab("Settings", JScrollPane(SettingsPanel(store)).apply { border = null })
+        tabs.addTab("Settings", JScrollPane(SettingsPanel(store, updates, ::showUpdate)).apply { border = null })
         tabs.putClientProperty("JTabbedPane.tabInsets", java.awt.Insets(4, 18, 4, 18))
+        // An available update is announced next to the tabs: visible on every tab, in nobody's way.
+        updateButton.putClientProperty("FlatLaf.style", "arc: 999; margin: 3,12,3,12; borderColor: #3b82f6; foreground: #3b82f6")
+        updateButton.addActionListener { showUpdate() }
+        tabs.putClientProperty(
+            "JTabbedPane.trailingComponent",
+            JPanel(MigLayout("insets 0 0 0 14, filly", "push[]", "[center]")).apply { add(updateButton) },
+        )
         contentPane = tabs
 
+        updates.addListener { SwingUtilities.invokeLater(::refreshUpdate) }
+        refreshUpdate()
         manager.addListener(::queueRefresh)
         refresh()
         minimumSize = Dimension(760, 420)
@@ -280,6 +293,21 @@ class MainWindow(
     fun showSettings() {
         showWindow()
         tabs.selectedIndex = 2
+    }
+
+    /** Offers the available update, if there is one. */
+    fun showUpdate() {
+        val update = updates.available ?: return
+        showWindow()
+        // The tray menu stays usable while the (modal) dialog is open: do not open a second one.
+        updateDialog?.takeIf { it.isDisplayable }?.let { return it.toFront() }
+        UpdateDialog(this, updates, update, onExit).also { updateDialog = it }.isVisible = true
+    }
+
+    private fun refreshUpdate() {
+        val update = updates.available
+        updateButton.isVisible = update != null
+        if (update != null) updateButton.text = "Update to ${update.release.version}"
     }
 
     // ------------------------------------------------------------------ activity tab

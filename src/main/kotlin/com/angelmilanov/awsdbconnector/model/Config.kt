@@ -49,6 +49,9 @@ data class AppSettings(
     val healthCheckSeconds: Int = 30,
     val awsCliPath: String = "",
     val pluginPath: String = "",
+    val checkForUpdates: Boolean = true,
+    /** Release tag the user chose not to be reminded of again. */
+    val skippedUpdate: String = "",
 )
 
 @Serializable

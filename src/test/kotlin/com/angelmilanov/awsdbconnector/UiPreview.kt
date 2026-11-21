@@ -13,6 +13,13 @@ import com.angelmilanov.awsdbconnector.ui.AppIcon
 import com.angelmilanov.awsdbconnector.ui.MainWindow
 import com.angelmilanov.awsdbconnector.ui.ProfileDialog
 import com.angelmilanov.awsdbconnector.ui.Theme
+import com.angelmilanov.awsdbconnector.ui.UpdateDialog
+import com.angelmilanov.awsdbconnector.update.AppInstall
+import com.angelmilanov.awsdbconnector.update.AppVersion
+import com.angelmilanov.awsdbconnector.update.Asset
+import com.angelmilanov.awsdbconnector.update.InstallKind
+import com.angelmilanov.awsdbconnector.update.Release
+import com.angelmilanov.awsdbconnector.update.UpdateService
 import com.angelmilanov.awsdbconnector.util.ActivityLog
 import com.angelmilanov.awsdbconnector.util.Notifications
 import java.awt.Color
@@ -57,9 +64,20 @@ fun main(args: Array<String>) {
     manager.sync(store.config.profiles, startNew = true)
     Thread.sleep(1500)
 
+    val release = Release(
+        AppVersion.parse("1.4.0")!!, "v1.4.0",
+        "## What's Changed\n* Adds an update check\n* Reconnects faster after the computer wakes up\n\n" +
+            "**Full Changelog**: https://github.com/angel-milanov/AWS-DB-Connector/compare/v1.3.2...v1.4.0",
+        "https://github.com/angel-milanov/AWS-DB-Connector/releases/tag/v1.4.0",
+        listOf(Asset("AWSDBConnector-v1.4.0-windows-x64.msi", "https://github.com/", 89_568_277, "0".repeat(64))),
+    )
+    val install = AppInstall(AppVersion.parse("1.3.2")!!, File("AWSDBConnector.exe").toPath(), InstallKind.WINDOWS_INSTALLER, "windows-x64")
+    val updates = UpdateService(store, log, Notifications { _, _, _ -> }, install) { release }
+    updates.check(manual = true)
+
     for (mode in listOf(ThemeMode.LIGHT, ThemeMode.DARK)) SwingUtilities.invokeAndWait {
         Theme.apply(mode)
-        val window = MainWindow(store, manager, LoginGate { _, _ -> CompletableFuture.completedFuture(false) }, log, true) {}
+        val window = MainWindow(store, manager, LoginGate { _, _ -> CompletableFuture.completedFuture(false) }, log, updates, true) {}
         window.addNotify()
         window.validate()
         val tabs = window.contentPane as JTabbedPane
@@ -74,6 +92,11 @@ fun main(args: Array<String>) {
         dialog.validate()
         snapshot(dialog.contentPane, File(out, "${mode.name.lowercase()}-dialog.png"))
         dialog.dispose()
+        val update = UpdateDialog(window, updates, updates.available!!) {}
+        update.addNotify()
+        update.validate()
+        snapshot(update.contentPane, File(out, "${mode.name.lowercase()}-update.png"))
+        update.dispose()
         window.dispose()
     }
 

@@ -7,6 +7,9 @@ import com.angelmilanov.awsdbconnector.tunnel.TunnelManager
 import com.angelmilanov.awsdbconnector.ui.MainWindow
 import com.angelmilanov.awsdbconnector.ui.Theme
 import com.angelmilanov.awsdbconnector.ui.TrayController
+import com.angelmilanov.awsdbconnector.update.AppInstall
+import com.angelmilanov.awsdbconnector.update.GitHubReleases
+import com.angelmilanov.awsdbconnector.update.UpdateService
 import com.angelmilanov.awsdbconnector.util.ActivityLog
 import com.angelmilanov.awsdbconnector.util.OsNotifier
 import com.angelmilanov.awsdbconnector.util.Platform
@@ -32,6 +35,7 @@ fun main() {
     val sso = SsoLoginManager({ store.settings }, log, notifier)
     val manager = TunnelManager({ store.settings }, SsmBackend { store.settings }, sso, notifier, log)
     sso.addSuccessListener(manager::onSignedIn)
+    val updates = UpdateService(store, log, notifier, AppInstall.detect(), GitHubReleases())
 
     val exiting = AtomicBoolean(false)
     var tray: TrayController? = null
@@ -50,8 +54,8 @@ fun main() {
     SwingUtilities.invokeLater {
         Theme.apply(store.settings.theme)
         val traySupported = java.awt.SystemTray.isSupported()
-        val window = MainWindow(store, manager, sso, log, hideOnClose = traySupported, onExit = exit)
-        tray = TrayController(manager, window, exit).also { notifier.trayIcon = it.trayIcon }
+        val window = MainWindow(store, manager, sso, log, updates, hideOnClose = traySupported, onExit = exit)
+        tray = TrayController(manager, window, updates, exit).also { notifier.trayIcon = it.trayIcon }
         listenForActivation { SwingUtilities.invokeLater { window.showWindow() } }
 
         store.addListener { cfg -> manager.sync(cfg.profiles, startNew = true) }
@@ -59,6 +63,7 @@ fun main() {
         log.log("app", "Started – ${store.config.profiles.size} connection(s) configured")
 
         if (!traySupported || store.settings.showWindowOnStart || store.config.profiles.isEmpty()) window.showWindow()
+        updates.start()
     }
 }
 

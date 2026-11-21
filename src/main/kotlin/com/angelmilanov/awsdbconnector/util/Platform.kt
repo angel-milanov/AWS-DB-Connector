@@ -24,6 +24,26 @@ object Platform {
         dir
     }
 
+    /** Per-user directory for files that can be fetched again, such as downloaded updates. Not readable by other users. */
+    val cacheDir: Path by lazy {
+        val home = System.getProperty("user.home")
+        val dir = when {
+            isWindows -> Paths.get(System.getenv("LOCALAPPDATA") ?: "$home\\AppData\\Local", "AWSDBConnector")
+            isMac -> Paths.get(home, "Library", "Caches", "AWSDBConnector")
+            else -> Paths.get(System.getenv("XDG_CACHE_HOME")?.takeIf { it.isNotBlank() } ?: "$home/.cache", "awsdbconnector")
+        }
+        Files.createDirectories(dir)
+        dir
+    }
+
+    /** The user's download folder, or the home directory if there is none. */
+    val downloadsDir: Path
+        get() {
+            val home = Paths.get(System.getProperty("user.home"))
+            val xdg = if (isLinux) runQuick("xdg-user-dir", "DOWNLOAD")?.trim()?.takeIf { it.isNotEmpty() }?.let(Paths::get) else null
+            return listOfNotNull(xdg, home.resolve("Downloads")).firstOrNull(Files::isDirectory) ?: home
+        }
+
     /** Looks for an executable: explicit override first, then PATH, then well known install locations. */
     fun findExecutable(override: String, name: String, wellKnown: List<String>): String? {
         if (override.isNotBlank()) return override.trim().takeIf { File(it).isFile }
