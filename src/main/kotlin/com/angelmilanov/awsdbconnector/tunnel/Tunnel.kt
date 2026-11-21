@@ -86,7 +86,8 @@ class Tunnel(
 
     // ------------------------------------------------------------------ user actions
 
-    /** Binds the local port and establishes the session. */
+    /** Binds the local port and establishes the session. One caller at a time, so that the port is only bound once. */
+    @Synchronized
     fun start() {
         if (isActive) {
             ensureSession(userInitiated = true)
@@ -103,20 +104,13 @@ class Tunnel(
             return
         }
         val accept = Thread.ofVirtual().name("accept-${profile.localPort}").unstarted { acceptLoop(srv) }
-        val started = lock.withLock {
-            if (active) false else {
-                active = true
-                generation++
-                failures = 0
-                dropped = false
-                server = srv
-                acceptor = accept
-                true
-            }
-        }
-        if (!started) {
-            runCatching { srv.close() }
-            return
+        lock.withLock {
+            active = true
+            generation++
+            failures = 0
+            dropped = false
+            server = srv
+            acceptor = accept
         }
         log("Listening on 127.0.0.1:${profile.localPort}")
         accept.start()

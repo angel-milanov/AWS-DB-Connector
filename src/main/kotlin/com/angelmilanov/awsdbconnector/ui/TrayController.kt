@@ -6,21 +6,19 @@ import com.angelmilanov.awsdbconnector.tunnel.TunnelManager
 import com.angelmilanov.awsdbconnector.tunnel.TunnelState
 import com.angelmilanov.awsdbconnector.update.UpdateService
 import com.angelmilanov.awsdbconnector.util.Platform
+import com.angelmilanov.awsdbconnector.util.TrayHandle
 import java.awt.Color
 import java.awt.GraphicsEnvironment
 import java.awt.Menu
 import java.awt.MenuItem
 import java.awt.MouseInfo
+import java.awt.Point
 import java.awt.PopupMenu
-import java.awt.SystemTray
-import java.awt.Toolkit
-import java.awt.TrayIcon
 import java.awt.Window
-import java.awt.datatransfer.StringSelection
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
-import java.awt.event.WindowFocusListener
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.Icon
 import javax.swing.JDialog
@@ -41,25 +39,23 @@ class TrayController(
     private val window: MainWindow,
     private val updates: UpdateService,
     private val onExit: () -> Unit,
+    /** Null on a desktop without a system tray: there is nothing to control then. */
+    private val tray: TrayHandle?,
+    private val useSwingPopup: Boolean = Platform.isWindows,
+    /** Where the mouse pointer is: the Swing popup opens there. */
+    private val pointer: () -> Point? = { MouseInfo.getPointerInfo()?.location },
 ) {
     private sealed interface Node
     private data class Item(val text: String, val enabled: Boolean = true, val icon: Icon? = null, val action: (() -> Unit)? = null) : Node
     private data class Sub(val text: String, val plainText: String, val icon: Icon?, val children: List<Node>) : Node
     private data object Separator : Node
 
-    private val useSwingPopup = Platform.isWindows
     private val refreshQueued = AtomicBoolean(false)
     private var lastBadge: Color? = Color(0, 0, 0, 0)
     private var openPopup: JPopupMenu? = null
 
-    val trayIcon: TrayIcon? = if (SystemTray.isSupported()) {
-        TrayIcon(AppIcon.tray(null), "AWS DB Connector").apply { isImageAutoSize = true }
-    } else null
-
-    val isAvailable: Boolean get() = trayIcon != null
-
     init {
-        trayIcon?.let { icon ->
+        tray?.let { icon ->
             icon.addMouseListener(object : MouseAdapter() {
                 override fun mouseClicked(e: MouseEvent) {
                     if (SwingUtilities.isLeftMouseButton(e)) window.showWindow()
@@ -72,7 +68,6 @@ class TrayController(
                     if (useSwingPopup && e.isPopupTrigger) showSwingPopup()
                 }
             })
-            runCatching { SystemTray.getSystemTray().add(icon) }
             manager.addListener(::queueRefresh)
             updates.addListener(::queueRefresh)
             refresh()
@@ -80,7 +75,7 @@ class TrayController(
     }
 
     fun remove() {
-        trayIcon?.let { runCatching { SystemTray.getSystemTray().remove(it) } }
+        runCatching { tray?.remove() }
     }
 
     private fun queueRefresh() {
@@ -91,7 +86,7 @@ class TrayController(
     }
 
     private fun refresh() {
-        val icon = trayIcon ?: return
+        val icon = tray ?: return
         val tunnels = manager.all()
         val states = tunnels.map { it.state }
         val badgeState = listOf(
@@ -159,9 +154,7 @@ class TrayController(
         children += Item("Check status") { manager.checkStatus(id) }
         if (t.state == TunnelState.AUTH_REQUIRED) children += Item("Sign in to AWS…") { manager.signIn(p.awsProfile) }
         children += Separator
-        children += Item("Copy $address") {
-            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(address), null)
-        }
+        children += Item("Copy $address") { Platform.desktop.copy(address) }
         children += Item("Edit…") { window.editProfile(id) }
         return Sub("${p.name}    :${p.localPort}", "${p.name} (:${p.localPort}) – ${t.state.label}", StatusDot.of(t.state), children)
     }
@@ -201,7 +194,7 @@ class TrayController(
     private fun showSwingPopup() {
         Theme.refreshFromSystem()
         openPopup?.isVisible = false
-        val pointer = MouseInfo.getPointerInfo()?.location ?: return
+        val at = pointer() ?: return
         val popup = JPopupMenu()
         fillSwing({ popup.add(it) }, { popup.addSeparator() }, buildModel())
 
@@ -211,11 +204,10 @@ class TrayController(
             type = Window.Type.UTILITY
             isAlwaysOnTop = true
             setSize(1, 1)
-            location = pointer
+            location = at
             runCatching { opacity = 0f }
         }
-        anchor.addWindowFocusListener(object : WindowFocusListener {
-            override fun windowGainedFocus(e: WindowEvent) {}
+        anchor.addWindowFocusListener(object : WindowAdapter() {
             override fun windowLostFocus(e: WindowEvent) {
                 popup.isVisible = false
             }
@@ -233,10 +225,10 @@ class TrayController(
         // Open upwards / to the left when there is not enough room (tray is usually at the bottom right).
         val size = popup.preferredSize
         val screen = GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices
-            .map { it.defaultConfiguration.bounds }.firstOrNull { it.contains(pointer) }
+            .map { it.defaultConfiguration.bounds }.firstOrNull { it.contains(at) }
             ?: GraphicsEnvironment.getLocalGraphicsEnvironment().maximumWindowBounds
-        val dx = if (pointer.x + size.width > screen.x + screen.width) -size.width else 0
-        val dy = if (pointer.y + size.height > screen.y + screen.height) -size.height else 0
+        val dx = if (at.x + size.width > screen.x + screen.width) -size.width else 0
+        val dy = if (at.y + size.height > screen.y + screen.height) -size.height else 0
         openPopup = popup
         popup.show(anchor.contentPane, dx, dy)
         anchor.toFront()

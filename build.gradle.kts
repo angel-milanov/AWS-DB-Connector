@@ -2,6 +2,7 @@ plugins {
     kotlin("jvm") version "2.4.21"
     kotlin("plugin.serialization") version "2.4.21"
     application
+    jacoco
 }
 
 group = "com.angelmilanov"
@@ -44,6 +45,53 @@ application {
 
 tasks.test {
     useJUnitPlatform()
+    finalizedBy(tasks.jacocoTestReport)
+
+    // The tests must not see the configuration, the cache or the AWS profiles of whoever runs them, let alone change
+    // them: everything the application looks for in the user's home is pointed at an empty directory.
+    val home = layout.buildDirectory.dir("test-home").get().asFile
+    doFirst {
+        home.deleteRecursively()
+        home.mkdirs()
+    }
+    systemProperty("user.home", home.absolutePath)
+    // HOME is where the AWS SDK looks for its files. Not USERPROFILE: the file dialogs of Windows need the real one.
+    environment("HOME", home.absolutePath)
+    environment("APPDATA", File(home, "AppData/Roaming").absolutePath)
+    environment("LOCALAPPDATA", File(home, "AppData/Local").absolutePath)
+    environment("XDG_CONFIG_HOME", File(home, ".config").absolutePath)
+    environment("XDG_CACHE_HOME", File(home, ".cache").absolutePath)
+    systemProperty("aws.configFile", File(home, ".aws/config").absolutePath)
+    systemProperty("aws.sharedCredentialsFile", File(home, ".aws/credentials").absolutePath)
+    // The windows of the application are created for real. Without a display (build servers) run the build with xvfb-run.
+    systemProperty("java.awt.headless", "false")
+}
+
+tasks.jacocoTestReport {
+    // Not dependsOn: the report is also wanted when a test has failed, to see what the others covered.
+    mustRunAfter(tasks.test)
+    reports {
+        html.required = true
+        xml.required = true // read by the build server for the coverage badge
+    }
+}
+
+// Every line of the application is run by a test; the few that cannot be are marked with @ExcludeFromJacocoGeneratedReport.
+tasks.jacocoTestCoverageVerification {
+    dependsOn(tasks.test, tasks.jacocoTestReport)
+    violationRules {
+        rule {
+            limit {
+                counter = "LINE"
+                value = "COVEREDRATIO"
+                minimum = "1.0".toBigDecimal()
+            }
+        }
+    }
+}
+
+tasks.check {
+    dependsOn(tasks.jacocoTestCoverageVerification)
 }
 
 /** Draws the application icon (ui/Theme.kt) into the file formats of the native packages: ico, icns and png. */

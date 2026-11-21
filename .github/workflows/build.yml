@@ -1,6 +1,7 @@
 # Build, test, package and release AWS DB Connector for Windows, macOS and Linux.
 #
-#   every push / pull request ............ test
+#   every push / pull request ............ test, with every line of the application covered (report in the run's "Artifacts")
+#   default branch ....................... + the coverage badge of the README is brought up to date
 #   default branch, tags, manual run ..... + native packages for every platform (downloadable from the run's "Artifacts")
 #   tags like v1.2.3 ..................... + GitHub release with the packages attached
 #
@@ -43,6 +44,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       release-name: ${{ steps.version.outputs.release-name }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      coverage: ${{ steps.coverage.outputs.coverage }}
     steps:
       - name: Determine version
         id: version
@@ -77,10 +79,46 @@ jobs:
           java-version: '21'
           cache: gradle
 
+      # The tests create the windows of the application for real, so they need a display to draw on: Xvfb is one
+      # that exists in memory only. The libraries are what Java needs to talk to it.
+      - name: Install a virtual display
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends xvfb xauth libxtst6 libxi6 libxrender1 libxext6 libfreetype6 fontconfig fonts-dejavu-core
+
+      # "build" fails if a test fails or if a line of the application is not run by any test (build.gradle.kts).
       - name: Build and test
         run: |
           chmod +x gradlew
-          ./gradlew build
+          xvfb-run --auto-servernum ./gradlew build
+
+      - name: Report the coverage
+        id: coverage
+        if: ${{ !cancelled() }}
+        run: |
+          report=build/reports/jacoco/test/jacocoTestReport.xml
+          if [[ ! -f "$report" ]]; then
+            echo "::warning::There is no coverage report: the tests did not run."
+            exit 0
+          fi
+          # The last line counter of the report is the one of the whole application: <counter type="LINE" missed="0" covered="2126"/>
+          counter=$(grep -o '<counter type="LINE"[^>]*>' "$report" | tail -n 1)
+          missed=$(sed -E 's/.*missed="([0-9]+)".*/\1/' <<< "$counter")
+          covered=$(sed -E 's/.*covered="([0-9]+)".*/\1/' <<< "$counter")
+          total=$((missed + covered))
+          # Rounded down, so that 99.96 % is not shown as 100 %.
+          coverage=$(awk -v covered="$covered" -v total="$total" 'BEGIN { pct = int(1000 * covered / total) / 10; print (pct == int(pct) ? int(pct) : pct) }')
+          echo "coverage=$coverage" >> "$GITHUB_OUTPUT"
+          echo "Line coverage: **$coverage %** ($covered of $total lines). The full report is in the artifact \`coverage-report\`." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: build/reports/jacoco/test/html/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload test reports
         if: failure()
@@ -89,6 +127,45 @@ jobs:
           name: test-reports
           path: build/reports/tests/
           retention-days: 7
+
+  # ---------------------------------------------------------------------------- coverage badge (default branch only)
+
+  # The badge in the README is drawn by shields.io from a small JSON file. That file is the only content of the branch
+  # "badges", which this job replaces after every build of the default branch - also after a failed one, so that the
+  # badge shows what was measured and not what was hoped for.
+  coverage-badge:
+    name: Coverage badge
+    needs: test
+    if: >-
+      !cancelled() && needs.test.outputs.coverage != '' &&
+      github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    # A badge that could not be updated is no reason to call the build failed (release.yml only releases successful builds).
+    continue-on-error: true
+    permissions:
+      contents: write   # push the branch "badges"
+    steps:
+      - name: Publish the coverage
+        env:
+          COVERAGE: ${{ needs.test.outputs.coverage }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          whole=${COVERAGE%.*}
+          if (( whole >= 100 )); then color=brightgreen
+          elif (( whole >= 90 )); then color=green
+          elif (( whole >= 75 )); then color=yellow
+          else color=red
+          fi
+          mkdir badges && cd badges
+          git init --quiet --initial-branch=badges
+          printf '{"schemaVersion": 1, "label": "coverage", "message": "%s%%", "color": "%s"}\n' "$COVERAGE" "$color" > coverage.json
+          cat coverage.json
+          git add coverage.json
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit --quiet --message "Coverage of ${GITHUB_SHA::7}: $COVERAGE %"
+          # The branch has no history worth keeping: it is replaced by this one commit.
+          git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges
 
   # ---------------------------------------------------------------------------- package
 

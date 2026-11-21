@@ -9,18 +9,22 @@ fun interface Notifications {
 }
 
 /** Desktop notifications using the native mechanism of the respective operating system. */
-class OsNotifier(private val enabled: () -> Boolean, private val log: ActivityLog) : Notifications {
+class OsNotifier(
+    private val enabled: () -> Boolean,
+    private val log: ActivityLog,
+    private val os: Os = Platform.os,
+) : Notifications {
     @Volatile
-    var trayIcon: TrayIcon? = null
+    var tray: TrayHandle? = null
 
     override fun show(title: String, text: String, level: NoticeLevel) {
         log.log("notify", "$title – $text")
         if (!enabled()) return
         Thread.ofVirtual().start {
-            val delivered = when {
-                Platform.isMac -> mac(title, text)
-                Platform.isLinux -> linux(title, text, level)
-                else -> false
+            val delivered = when (os) {
+                Os.MAC -> mac(title, text)
+                Os.LINUX -> linux(title, text, level)
+                Os.WINDOWS -> false
             }
             if (!delivered) tray(title, text, level) // Windows toast (and fallback elsewhere)
         }
@@ -32,7 +36,7 @@ class OsNotifier(private val enabled: () -> Boolean, private val log: ActivityLo
             NoticeLevel.WARNING -> TrayIcon.MessageType.WARNING
             NoticeLevel.ERROR -> TrayIcon.MessageType.ERROR
         }
-        runCatching { trayIcon?.displayMessage(title, text, type) }
+        runCatching { tray?.displayMessage(title, text, type) }
     }
 
     private fun mac(title: String, text: String): Boolean {

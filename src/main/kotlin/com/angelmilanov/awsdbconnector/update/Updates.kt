@@ -4,6 +4,7 @@ import com.angelmilanov.awsdbconnector.model.ConfigStore
 import com.angelmilanov.awsdbconnector.util.ActivityLog
 import com.angelmilanov.awsdbconnector.util.NoticeLevel
 import com.angelmilanov.awsdbconnector.util.Notifications
+import com.angelmilanov.awsdbconnector.util.Os
 import com.angelmilanov.awsdbconnector.util.Platform
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -67,20 +68,20 @@ enum class InstallKind(val extension: String) {
 data class AppInstall(val version: AppVersion, val launcher: Path, val kind: InstallKind, val platform: String) {
     companion object {
         /** Null for development runs (gradlew run): only a packaged application knows its version and location. */
-        fun detect(): AppInstall? {
+        fun detect(os: Os = Platform.os): AppInstall? {
             val version = System.getProperty("jpackage.app-version")?.let(AppVersion::parse) ?: return null
             val launcher = System.getProperty("jpackage.app-path")?.let { Paths.get(it) } ?: return null
             // Set by the jpackageImage task in build.gradle.kts.
             val packageType = System.getProperty("awsdbconnector.package", "app-image")
             val arch = if (System.getProperty("os.arch") in setOf("aarch64", "arm64")) "arm64" else "x64"
-            val (os, kind) = when {
+            val (name, kind) = when (os) {
                 // The exe installer is a wrapper around the msi package: both are updated with the msi.
-                Platform.isWindows -> "windows" to
+                Os.WINDOWS -> "windows" to
                     if (packageType == "msi" || packageType == "exe") InstallKind.WINDOWS_INSTALLER else InstallKind.WINDOWS_PORTABLE
-                Platform.isMac -> "macos" to InstallKind.MAC_DMG
-                else -> "linux" to if (packageType == "deb") InstallKind.LINUX_DEB else InstallKind.LINUX_PORTABLE
+                Os.MAC -> "macos" to InstallKind.MAC_DMG
+                Os.LINUX -> "linux" to if (packageType == "deb") InstallKind.LINUX_DEB else InstallKind.LINUX_PORTABLE
             }
-            return AppInstall(version, launcher, kind, "$os-$arch")
+            return AppInstall(version, launcher, kind, "$name-$arch")
         }
     }
 }
@@ -99,7 +100,7 @@ fun interface ReleaseSource {
 }
 
 @Serializable
-private data class GitHubRelease(
+internal data class GitHubRelease(
     @SerialName("tag_name") val tag: String,
     val body: String? = null,
     @SerialName("html_url") val pageUrl: String? = null,
@@ -109,7 +110,7 @@ private data class GitHubRelease(
 )
 
 @Serializable
-private data class GitHubAsset(
+internal data class GitHubAsset(
     val name: String,
     @SerialName("browser_download_url") val url: String,
     val size: Long = 0,
@@ -138,9 +139,9 @@ fun parseRelease(text: String): Release? {
 }
 
 /** The latest release on GitHub; pre-releases and drafts are never returned by this API. */
-class GitHubReleases : ReleaseSource {
+class GitHubReleases(private val api: String = "https://api.github.com") : ReleaseSource {
     override fun latest(): Release? {
-        val request = HttpRequest.newBuilder(URI("https://api.github.com/repos/$REPOSITORY/releases/latest"))
+        val request = HttpRequest.newBuilder(URI("$api/repos/$REPOSITORY/releases/latest"))
             .timeout(Duration.ofSeconds(30))
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
@@ -212,6 +213,8 @@ class UpdateService(
     /** Null in development runs, in which there is nothing to update. */
     val install: AppInstall?,
     private val source: ReleaseSource,
+    /** Waits between two checks. */
+    private val pause: (Duration) -> Unit = Thread::sleep,
 ) {
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
     private var announced: String? = null
@@ -238,10 +241,10 @@ class UpdateService(
         if (install == null) return
         Thread.ofVirtual().name("update-check").start {
             runCatching { installerDir.toFile().deleteRecursively() } // the installer of the previous update
-            Thread.sleep(Duration.ofSeconds(30))
+            pause(Duration.ofSeconds(30))
             while (true) {
                 val failed = store.settings.checkForUpdates && check(manual = false) is UpdateState.Failed
-                Thread.sleep(if (failed) Duration.ofHours(1) else Duration.ofHours(24))
+                pause(if (failed) Duration.ofHours(1) else Duration.ofHours(24))
             }
         }
     }

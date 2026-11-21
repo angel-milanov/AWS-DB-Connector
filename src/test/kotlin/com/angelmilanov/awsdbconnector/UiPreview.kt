@@ -72,7 +72,7 @@ fun main(args: Array<String>) {
         listOf(Asset("AWSDBConnector-v1.4.0-windows-x64.msi", "https://github.com/", 89_568_277, "0".repeat(64))),
     )
     val install = AppInstall(AppVersion.parse("1.3.2")!!, File("AWSDBConnector.exe").toPath(), InstallKind.WINDOWS_INSTALLER, "windows-x64")
-    val updates = UpdateService(store, log, Notifications { _, _, _ -> }, install) { release }
+    val updates = UpdateService(store, log, Notifications { _, _, _ -> }, install, { release })
     updates.check(manual = true)
 
     for (mode in listOf(ThemeMode.LIGHT, ThemeMode.DARK)) SwingUtilities.invokeAndWait {

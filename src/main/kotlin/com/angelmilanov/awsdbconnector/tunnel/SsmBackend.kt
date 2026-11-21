@@ -42,7 +42,11 @@ fun interface TunnelBackend {
  * `StartSession` is called with the AWS SDK, the data channel is then handled by the
  * AWS session-manager-plugin, which listens on a private, randomly chosen loopback port.
  */
-class SsmBackend(private val settings: () -> AppSettings) : TunnelBackend {
+class SsmBackend(
+    private val settings: () -> AppSettings,
+    /** How long the Session Manager plugin gets to report that it is ready. */
+    private val startupTimeoutSeconds: Long = 30,
+) : TunnelBackend {
 
     override fun open(profile: ConnectionProfile, log: (String) -> Unit): BackendSession {
         val plugin = Platform.findSessionManagerPlugin(settings().pluginPath)
@@ -90,7 +94,7 @@ class SsmBackend(private val settings: () -> AppSettings) : TunnelBackend {
         ).redirectErrorStream(true)
         builder.environment()[RESPONSE_ENV] = responseJson
         val process = try {
-            builder.start()
+            Platform.start(builder)
         } catch (e: Exception) {
             terminateRemote(profile, sessionId)
             throw TunnelException("Could not start session-manager-plugin: ${e.message}", e)
@@ -107,7 +111,7 @@ class SsmBackend(private val settings: () -> AppSettings) : TunnelBackend {
         }
         process.onExit().thenRun { ready.countDown() }
         val session = PluginSession(profile, sessionId, internalPort, process)
-        val signalled = ready.await(STARTUP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        val signalled = ready.await(startupTimeoutSeconds, TimeUnit.SECONDS)
         if (!process.isAlive) {
             throw TunnelException("session-manager-plugin exited with code ${process.exitValue()} – see the activity log")
         }
@@ -164,6 +168,5 @@ class SsmBackend(private val settings: () -> AppSettings) : TunnelBackend {
     companion object {
         const val DOCUMENT = "AWS-StartPortForwardingSessionToRemoteHost"
         private const val RESPONSE_ENV = "AWS_SSM_START_SESSION_RESPONSE"
-        private const val STARTUP_TIMEOUT_SECONDS = 30L
     }
 }

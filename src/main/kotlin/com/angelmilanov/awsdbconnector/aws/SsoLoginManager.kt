@@ -97,9 +97,7 @@ class SsoLoginManager(
             NoticeLevel.WARNING,
         )
         log.log("sso", "Running: aws sso login --profile $loginProfile")
-        val process = ProcessBuilder(aws, "sso", "login", "--profile", loginProfile)
-            .redirectErrorStream(true)
-            .start()
+        val process = Platform.start(ProcessBuilder(aws, "sso", "login", "--profile", loginProfile).redirectErrorStream(true))
         process.outputStream.close()
         Thread.ofVirtual().start {
             runCatching {

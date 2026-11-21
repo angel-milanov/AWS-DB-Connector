@@ -1,0 +1,104 @@
+name: Bug report
+description: Something does not work the way it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting. Please try the [latest release](https://github.com/angel-milanov/AWS-DB-Connector/releases/latest) first, and have a look at the [troubleshooting table](https://github.com/angel-milanov/AWS-DB-Connector#troubleshooting).
+
+        **Remove what is private** from everything you paste: AWS profile names, account-specific host names, instance ids and SSO start URLs. The application never logs credentials or tokens. Security problems are [reported privately](https://github.com/angel-milanov/AWS-DB-Connector/security/advisories/new), not here.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you saw, and what you expected instead. Include error messages word for word.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What has to be done to see the problem? Does it happen every time?
+      placeholder: |
+        1. Connect "My database"
+        2. Put the computer to sleep for an hour
+        3. Wake it up: the status stays at "Reconnecting…"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version of AWS DB Connector
+      description: Shown under Settings > Updates.
+      placeholder: 1.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: package
+    attributes:
+      label: How was it installed?
+      options:
+        - Windows installer (msi or exe)
+        - Windows portable (zip)
+        - macOS, Apple Silicon (dmg)
+        - macOS, Intel (dmg)
+        - Linux package (deb)
+        - Linux portable (tar.gz)
+        - Built from source
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Name and version. For Linux also the desktop environment.
+      placeholder: Windows 11 24H2 / macOS 15.1 / Ubuntu 24.04 with GNOME
+    validations:
+      required: true
+
+  - type: input
+    id: tools
+    attributes:
+      label: Session Manager plugin and AWS CLI
+      description: Settings > Tools shows the version of the plugin; `aws --version` that of the AWS CLI.
+      placeholder: session-manager-plugin 1.2.707.0, aws-cli 2.22.0
+
+  - type: dropdown
+    id: profile
+    attributes:
+      label: Kind of AWS profile
+      options:
+        - IAM Identity Center (SSO)
+        - Role on top of an SSO profile (source_profile)
+        - Access keys
+        - Something else
+        - Not related to the problem
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Activity log
+      description: Activity tab > click into the log > select all > copy. The log is gone once the application exits, so copy it while the problem is on screen.
+      render: text
+
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else?
+      description: Screenshots, whether it worked in an earlier version, whether the same tunnel works with `aws ssm start-session`.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I have searched the existing issues and found no report of this problem.
+          required: true
+        - label: I have removed what should not be public from the text above.
+          required: true

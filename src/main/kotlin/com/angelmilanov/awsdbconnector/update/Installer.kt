@@ -1,7 +1,6 @@
 package com.angelmilanov.awsdbconnector.update
 
 import com.angelmilanov.awsdbconnector.util.Platform
-import java.awt.Desktop
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
@@ -31,10 +30,16 @@ sealed interface InstallResult {
  * replaced), so on Windows and macOS a small script waits for this process to end, installs and starts the new version.
  */
 object Installer {
-    fun install(install: AppInstall, update: Update, file: Path): InstallResult = when (install.kind) {
+    fun install(
+        install: AppInstall,
+        update: Update,
+        file: Path,
+        /** Asks for administrator rights on Linux. Null where it is not installed. */
+        pkexec: String? = Platform.findExecutable("", "pkexec", listOf("/usr/bin/pkexec")),
+    ): InstallResult = when (install.kind) {
         InstallKind.WINDOWS_INSTALLER -> windowsInstaller(install, file)
         InstallKind.MAC_DMG -> macDiskImage(install, file)
-        InstallKind.LINUX_DEB -> debianPackage(install, file)
+        InstallKind.LINUX_DEB -> debianPackage(install, file, pkexec)
         InstallKind.WINDOWS_PORTABLE, InstallKind.LINUX_PORTABLE -> {
             reveal(file)
             // <folder>\AWSDBConnector.exe on Windows, <folder>/bin/AWSDBConnector on Linux
@@ -65,15 +70,20 @@ object Installer {
         $$"if ($exe) { Start-Process -FilePath $exe }",
     ).joinToString("; ")
 
-    internal fun windowsInstaller(install: AppInstall, msi: Path, msiexec: Path = windowsSystem("msiexec.exe")): InstallResult {
+    internal fun windowsInstaller(
+        install: AppInstall,
+        msi: Path,
+        msiexec: Path = windowsSystem("msiexec.exe"),
+        env: (String) -> String? = System::getenv,
+    ): InstallResult {
         val self = ProcessHandle.current()
         // The jpackage launcher runs the application in a child process of the same executable: wait for both.
         val launcher = self.parent().filter { parent ->
             parent.info().command().map { it.equals(install.launcher.toString(), ignoreCase = true) }.orElse(false)
         }
         val declinedShortcuts = buildList {
-            val desktop = Paths.get(System.getenv("PUBLIC") ?: "C:\\Users\\Public", "Desktop")
-            val menu = Paths.get(System.getenv("ProgramData") ?: "C:\\ProgramData", "Microsoft", "Windows", "Start Menu", "Programs")
+            val desktop = Paths.get(env("PUBLIC") ?: "C:\\Users\\Public", "Desktop")
+            val menu = Paths.get(env("ProgramData") ?: "C:\\ProgramData", "Microsoft", "Windows", "Start Menu", "Programs")
             if (Files.isDirectory(desktop) && Files.notExists(desktop.resolve("AWSDBConnector.lnk"))) add("JP_INSTALL_DESKTOP_SHORTCUT")
             if (Files.isDirectory(menu) && Files.notExists(menu.resolve("AWS DB Connector").resolve("AWSDBConnector.lnk"))) {
                 add("JP_INSTALL_STARTMENU_SHORTCUT")
@@ -124,7 +134,7 @@ object Installer {
         open "$app"
     """.trimIndent()
 
-    private fun macDiskImage(install: AppInstall, dmg: Path): InstallResult {
+    internal fun macDiskImage(install: AppInstall, dmg: Path): InstallResult {
         // AWSDBConnector.app/Contents/MacOS/AWSDBConnector
         val bundle = install.launcher.parent?.parent?.parent
         val replaceable = bundle != null && bundle.toString().endsWith(".app") &&
@@ -146,12 +156,13 @@ object Installer {
     /** $1 process to wait for, $2 launcher of the new version. */
     internal const val LINUX_RESTART_SCRIPT = $$"while kill -0 \"$1\" 2>/dev/null; do sleep 0.2; done; exec \"$2\""
 
-    private fun debianPackage(install: AppInstall, deb: Path): InstallResult {
+    internal fun debianPackage(install: AppInstall, deb: Path, pkexec: String?): InstallResult {
         val byHand = "To install it yourself, run:\nsudo apt install \"$deb\""
-        val pkexec = Platform.findExecutable("", "pkexec", listOf("/usr/bin/pkexec"))
-            ?: throw IOException("The package was downloaded, but pkexec is needed to install it.\n$byHand")
-        val apt = ProcessBuilder(pkexec, "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "--yes", deb.toString())
-            .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start()
+        if (pkexec == null) throw IOException("The package was downloaded, but pkexec is needed to install it.\n$byHand")
+        val apt = Platform.start(
+            ProcessBuilder(pkexec, "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "--yes", deb.toString())
+                .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD),
+        )
         apt.outputStream.close()
         val code = try {
             apt.waitFor()
@@ -169,21 +180,18 @@ object Installer {
 
     /** Starts a process that is meant to outlive this one. */
     private fun detached(directory: Path?, environment: Map<String, String>, vararg command: String) {
-        ProcessBuilder(*command).apply {
+        val builder = ProcessBuilder(*command).apply {
             directory?.let { directory(it.toFile()) }
             environment().putAll(environment)
             redirectInput(ProcessBuilder.Redirect.from(File(if (Platform.isWindows) "NUL" else "/dev/null")))
             redirectOutput(ProcessBuilder.Redirect.DISCARD)
             redirectError(ProcessBuilder.Redirect.DISCARD)
-        }.start()
+        }
+        Platform.start(builder)
     }
 
-    /** Shows [file] in the file manager. */
+    /** Shows [file] in the file manager, where there is one. */
     private fun reveal(file: Path) {
-        runCatching {
-            val desktop = Desktop.getDesktop()
-            if (desktop.isSupported(Desktop.Action.BROWSE_FILE_DIR)) desktop.browseFileDirectory(file.toFile())
-            else desktop.open(file.parent.toFile())
-        }
+        runCatching { Platform.desktop.reveal(file) }
     }
 }

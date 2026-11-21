@@ -6,12 +6,11 @@ import com.angelmilanov.awsdbconnector.update.InstallResult
 import com.angelmilanov.awsdbconnector.update.Installer
 import com.angelmilanov.awsdbconnector.update.Update
 import com.angelmilanov.awsdbconnector.update.UpdateService
+import com.angelmilanov.awsdbconnector.util.Platform
 import net.miginfocom.swing.MigLayout
-import java.awt.Desktop
 import java.awt.Window
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
-import java.net.URI
 import javax.swing.BorderFactory
 import javax.swing.ImageIcon
 import javax.swing.JButton
@@ -113,7 +112,7 @@ class UpdateDialog(
     }
 
     private fun browse(url: String) {
-        runCatching { Desktop.getDesktop().browse(URI(url)) }
+        runCatching { Platform.desktop.browse(url) }
     }
 
     private fun start() {
