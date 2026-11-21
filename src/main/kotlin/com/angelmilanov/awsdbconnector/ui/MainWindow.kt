@@ -147,7 +147,7 @@ class MainWindow(
             border = BorderFactory.createMatteBorder(1, 0, 1, 0, UIManager.getColor("Component.borderColor"))
         }
         val empty = JPanel(MigLayout("fill, wrap 1", "[center]", "push[]8[]14[]push")).apply {
-            add(JLabel(javax.swing.ImageIcon(AppIcon.render(64, null))))
+            add(JLabel(javax.swing.ImageIcon(AppIcon.logo(64))))
             add(JLabel("No connections yet").apply { putClientProperty("FlatLaf.styleClass", "h2") })
             add(JLabel("Create a connection to reach an RDS database through a bastion host.").apply {
                 foreground = UIManager.getColor("Label.disabledForeground")

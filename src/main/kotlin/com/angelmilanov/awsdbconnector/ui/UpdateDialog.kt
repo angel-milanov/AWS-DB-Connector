@@ -57,7 +57,7 @@ class UpdateDialog(
         val release = update.release
         val content = JPanel(MigLayout("insets 20 24 16 24, fillx, wrap 2, hidemode 3", "[]16[grow,fill]", "[][]14[grow,fill]10[][]16[]"))
 
-        content.add(JLabel(ImageIcon(AppIcon.render(48, null))), "spany 2, top")
+        content.add(JLabel(ImageIcon(AppIcon.logo(48))), "spany 2, top")
         content.add(JLabel("AWS DB Connector ${release.version} is available").apply { putClientProperty("FlatLaf.styleClass", "h2") })
         content.add(JLabel("You are using version ${updates.install?.version}. " + when {
             update.asset == null -> "This release has no package for your system."

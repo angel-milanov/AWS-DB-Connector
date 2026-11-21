@@ -112,6 +112,22 @@ fun main(args: Array<String>) {
         dispose()
     }
     ImageIO.write(strip, "png", File(out, "icons.png"))
+
+    val sizes = listOf(16, 20, 24, 32, 48, 64, 128, 256)
+    val app = BufferedImage(sizes.sumOf { it + 16 } + 16, 2 * 288, BufferedImage.TYPE_INT_ARGB)
+    app.createGraphics().apply {
+        color = Color(0x20, 0x20, 0x20); fillRect(0, 0, app.width, 288); color = Color(0xEE, 0xEE, 0xEE); fillRect(0, 288, app.width, 288)
+        for (row in 0..1) {
+            var x = 16
+            // The largest one is drawn with the margin of the macOS icon.
+            for (size in sizes) {
+                drawImage(AppIcon.app(size, if (size == 256) 100f / 1024f else 0f), x, row * 288 + 16, null)
+                x += size + 16
+            }
+        }
+        dispose()
+    }
+    ImageIO.write(app, "png", File(out, "app-icon.png"))
     manager.shutdown()
     exitProcess(0)
 }

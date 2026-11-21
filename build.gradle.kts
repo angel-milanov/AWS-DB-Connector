@@ -46,6 +46,18 @@ tasks.test {
     useJUnitPlatform()
 }
 
+/** Draws the application icon (ui/Theme.kt) into the file formats of the native packages: ico, icns and png. */
+val packageIcons = tasks.register<JavaExec>("packageIcons") {
+    group = "distribution"
+    description = "Writes the icons used by the native packages into build/package-icons"
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.angelmilanov.awsdbconnector.PackageIconsKt")
+    val dir = layout.buildDirectory.dir("package-icons")
+    outputs.dir(dir)
+    systemProperty("java.awt.headless", "true") // build servers have no display
+    args(dir.get().asFile.absolutePath)
+}
+
 /**
  * Builds a self-contained native application (no console window, bundled runtime) into build/jpackage.
  * Run with: gradlew jpackageImage                      -> app image (folder / .app bundle)
@@ -56,9 +68,10 @@ tasks.test {
 tasks.register<Exec>("jpackageImage") {
     group = "distribution"
     description = "Creates a native app image with jpackage"
-    dependsOn("installDist")
+    dependsOn("installDist", packageIcons)
 
     val launcher = javaToolchains.launcherFor(java.toolchain)
+    val iconDir = layout.buildDirectory.dir("package-icons")
     val libDir = layout.buildDirectory.dir("install/AWSDBConnector/lib")
     val destDir = layout.buildDirectory.dir("jpackage")
     val mainJar = tasks.jar.flatMap { it.archiveFileName }
@@ -66,13 +79,17 @@ tasks.register<Exec>("jpackageImage") {
     doFirst {
         delete(destDir)
         val javaHome = launcher.get().metadata.installationPath.asFile
-        val exe = if (System.getProperty("os.name").lowercase().contains("win")) "jpackage.exe" else "jpackage"
+        val os = System.getProperty("os.name").lowercase()
+        val exe = if (os.contains("win")) "jpackage.exe" else "jpackage"
+        val icon = "AWSDBConnector." + if (os.contains("win")) "ico" else if (os.contains("mac")) "icns" else "png"
         val type = (findProperty("jpackageType") as String?) ?: "app-image"
         val jpackageArgs = mutableListOf(
             File(javaHome, "bin/$exe").absolutePath,
             "--type", type,
             "--name", "AWSDBConnector",
             "--app-version", project.version.toString(),
+            // Launcher, shortcuts, installers and the macOS bundle show this instead of the default Java icon.
+            "--icon", iconDir.get().file(icon).asFile.absolutePath,
             "--input", libDir.get().asFile.absolutePath,
             "--main-jar", mainJar.get(),
             "--main-class", application.mainClass.get(),
@@ -94,6 +111,10 @@ tasks.register<Exec>("jpackageImage") {
                 "--win-shortcut", "--win-shortcut-prompt",
                 "--win-dir-chooser",
             )
+        }
+        if (type == "deb" || type == "rpm") {
+            // Entry in the applications menu; without a group it would be filed under an "Unknown" category.
+            jpackageArgs += listOf("--linux-shortcut", "--linux-menu-group", "Development;Database;")
         }
         commandLine(jpackageArgs)
     }
