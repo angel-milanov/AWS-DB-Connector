@@ -1,0 +1,18 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "packageRules": [
+    {
+      "description": "The AWS SDK is released almost every day: collect its updates into one pull request per week.",
+      "matchPackageNames": ["software.amazon.awssdk:**"],
+      "groupName": "AWS SDK",
+      "schedule": ["* * * * 1"]
+    },
+    {
+      "description": "The Java version is chosen in build.gradle.kts (jvmToolchain), which Renovate cannot update: do not bump the JDK of the CI jobs to a new major version on its own.",
+      "matchPackageNames": ["java-jdk", "eclipse-temurin"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    }
+  ]
+}
