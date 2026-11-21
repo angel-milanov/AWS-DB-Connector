@@ -10,6 +10,8 @@
 #   - Tags with a suffix (v1.3.0-rc.1, v2.0.0-beta) are published as pre-releases; the app itself gets version 1.3.0 / 2.0.0.
 #   - Versions are major.minor or major.minor.patch (MSI needs at least two parts, macOS at most three), and the major
 #     version must be 1 or higher (jpackage rejects macOS app versions that start with 0).
+#   - Library updates merged by Renovate are released without a tag of yours: release.yml tags the next patch version
+#     and starts this workflow for it.
 
 name: Build
 

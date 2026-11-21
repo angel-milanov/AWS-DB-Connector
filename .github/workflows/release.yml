@@ -1,0 +1,95 @@
+# Releases library updates on their own.
+#
+# Renovate merges minor and patch updates of the libraries without review (renovate.json). Once a day this workflow
+# looks at what has been merged since the last release. If that is nothing but changes made by Renovate, it tags the
+# next patch version (v1.2.3 -> v1.2.4) and starts the Build workflow for that tag, which publishes the release.
+#
+# Nothing is released when
+#   - no library version has changed: updates of GitHub Actions or of Gradle alone change nothing for the users,
+#   - one of the changes since the last release was not made by Renovate: your own work is never released
+#     automatically. Release it with a tag (see build.yml); automatic releases continue from that tag,
+#   - the build of the default branch has failed or is still running.
+#
+# To release without waiting for the schedule: Actions > Release library updates > Run workflow.
+
+name: Release library updates
+
+on:
+  schedule:
+    # Every day at 05:17 UTC. Renovate looks for library updates on Mondays, so this releases about once a week.
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # push the tag
+  actions: write    # start the Build workflow
+
+concurrency:
+  group: ${{ github.workflow }}
+
+jobs:
+  release:
+    name: Tag the next version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Always the default branch, also when the workflow is started by hand from another one.
+          ref: ${{ github.event.repository.default_branch }}
+          # The whole history and all tags.
+          fetch-depth: 0
+
+      - name: Tag the next version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          # The author of Renovate's commits.
+          BOT: renovate[bot]
+          # The file that holds the versions of the libraries.
+          LIBRARIES: build.gradle.kts
+        run: |
+          set -euo pipefail
+          say() { echo "::notice::$1"; echo "$1" >> "$GITHUB_STEP_SUMMARY"; }
+
+          # The newest release in the history of this branch. Pre-releases (v1.3.0-rc.1) do not count.
+          last=$(git tag --merged HEAD --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+(\.[0-9]+)?$' | head -n 1 || true)
+          if [[ -z "$last" ]]; then
+            say "Nothing was released: there is no release yet. The first one is made by hand, with a tag like v1.0.0."
+            exit 0
+          fi
+
+          if git diff --quiet "$last" HEAD -- "$LIBRARIES"; then
+            say "Nothing to release: no library has changed since $last."
+            exit 0
+          fi
+
+          # Merge commits are skipped: merging a pull request of Renovate by hand does not make it your own work.
+          others=$(git log --no-merges --format='%an%x09%h %s' "$last..HEAD" | awk -F '\t' -v bot="$BOT" '$1 != bot { print "- " $2 }')
+          if [[ -n "$others" ]]; then
+            say "Nothing was released: since $last there are changes that were not made by $BOT. Release them with a tag of your own; automatic releases continue from there."
+            echo "$others" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # The packages of a release are built from the tag. Do not tag what did not build on the branch.
+          build=$(gh run list --workflow build.yml --branch "$(git branch --show-current)" --commit "$(git rev-parse HEAD)" \
+            --event push --limit 1 --json conclusion --jq 'if length == 0 then "not started" else .[0].conclusion end')
+          if [[ "$build" != success ]]; then
+            say "Nothing was released: the build of $(git rev-parse --short HEAD) has not succeeded (${build:-still running})."
+            exit 0
+          fi
+
+          IFS=. read -r major minor patch <<< "${last#v}"
+          next="v$major.$minor.$(( 10#${patch:-0} + 1 ))"
+          if git rev-parse --quiet --verify "refs/tags/$next" > /dev/null; then
+            echo "::error::The tag $next exists already, but not in the history of this branch."
+            exit 1
+          fi
+
+          git tag "$next"
+          git push origin "refs/tags/$next"
+          # A tag pushed by a workflow does not start other workflows, so the build is started explicitly.
+          gh workflow run build.yml --ref "$next"
+
+          say "Releasing $next with the library updates since $last. The Build workflow publishes it."
+          git log --no-merges --format='- %s' "$last..HEAD" | tee -a "$GITHUB_STEP_SUMMARY"

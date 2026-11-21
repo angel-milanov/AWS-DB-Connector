@@ -3,10 +3,14 @@
   "extends": ["config:recommended"],
   "packageRules": [
     {
-      "description": "The AWS SDK is released almost every day: collect its updates into one pull request per week.",
-      "matchPackageNames": ["software.amazon.awssdk:**"],
-      "groupName": "AWS SDK",
-      "schedule": ["* * * * 1"]
+      "description": "Libraries: minor and patch updates are merged without review once the tests pass, and are then released by .github/workflows/release.yml. They are collected into one pull request per week (the AWS SDK alone is released almost every day), and a version is only taken after it has been public for 3 days. Renovate merges the pull request itself (platformAutomerge off), because GitHub's own auto-merge does not wait for the tests unless the branch protection requires them.",
+      "matchManagers": ["gradle"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "libraries",
+      "schedule": ["* * * * 1"],
+      "minimumReleaseAge": "3 days",
+      "automerge": true,
+      "platformAutomerge": false
     },
     {
       "description": "The Java version is chosen in build.gradle.kts (jvmToolchain), which Renovate cannot update: do not bump the JDK of the CI jobs to a new major version on its own.",
